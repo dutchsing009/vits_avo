@@ -22,7 +22,7 @@ from data_utils import (
 )
 from models import (
   SynthesizerTrn,
-  MultiPeriodDiscriminator,
+  MultiCoMBDiscriminator,
 )
 from losses import (
   generator_loss,
@@ -86,7 +86,12 @@ def run(rank, n_gpus, hps):
       hps.train.segment_size // hps.data.hop_length,
       n_speakers=hps.data.n_speakers,
       **hps.model).cuda(rank)
-  net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
+  net_d = MultiCoMBDiscriminator(
+    [[7, 11, 11, 11, 11, 5], [11, 21, 21, 21, 21, 5], [15, 41, 41, 41, 41, 5]], 
+    [16, 64, 256, 1024, 1024, 1024], 
+    [1, 4, 16, 64, 256, 1], 
+    [1, 1, 4, 4, 4, 1]
+  ).cuda(rank)
   optim_g = torch.optim.AdamW(
       net_g.parameters(), 
       hps.train.learning_rate, 
@@ -142,7 +147,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
     speakers = speakers.cuda(rank, non_blocking=True)
 
     with autocast(enabled=hps.train.fp16_run):
-      y_hat, l_length, attn, ids_slice, x_mask, z_mask,\
+      y_hat, x2, x1, l_length, attn, ids_slice, x_mask, z_mask,\
       (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(x, x_lengths, spec, spec_lengths, speakers)
 
       mel = spec_to_mel_torch(
@@ -167,7 +172,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
       y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice 
 
       # Discriminator
-      y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+      y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach(), x2.detach(), x1.detach())
       with autocast(enabled=False):
         loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
         loss_disc_all = loss_disc
